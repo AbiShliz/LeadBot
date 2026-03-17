@@ -25,6 +25,7 @@ active_surveys = {}
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 async def send_next_question(message: types.Message, manager):
+    """Отправляет следующий вопрос"""
     question = manager.get_current_question()
     
     if question['type'] == 'text':
@@ -39,6 +40,7 @@ async def send_next_question(message: types.Message, manager):
         await message.answer(question['text'], reply_markup=kb)
 
 async def finish_survey(message: types.Message, state: FSMContext, user_id: int, manager):
+    """Завершает опрос и сохраняет данные (без контакта)"""
     db.save_lead(
         user_id=user_id,
         username=message.from_user.username or '',
@@ -65,6 +67,7 @@ async def finish_survey(message: types.Message, state: FSMContext, user_id: int,
 
 @dp.message(Command('start'))
 async def cmd_start(message: types.Message, state: FSMContext):
+    """Начинает опрос"""
     user_id = message.from_user.id
     manager = SurveyManager(QUESTIONS)
     active_surveys[user_id] = manager
@@ -74,6 +77,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 @dp.message(SurveyStates.answering)
 async def process_answer(message: types.Message, state: FSMContext):
+    """Обрабатывает ответ на вопрос"""
     user_id = message.from_user.id
     manager = active_surveys.get(user_id)
     
@@ -99,6 +103,7 @@ async def process_answer(message: types.Message, state: FSMContext):
 
 @dp.message(SurveyStates.collecting_contact)
 async def process_contact(message: types.Message, state: FSMContext):
+    """Собирает контактные данные"""
     user_id = message.from_user.id
     manager = active_surveys.get(user_id)
     
@@ -133,6 +138,7 @@ async def process_contact(message: types.Message, state: FSMContext):
 
 @dp.message(Command('skip'))
 async def cmd_skip(message: types.Message, state: FSMContext):
+    """Пропускает текущий шаг (только для контакта)"""
     user_id = message.from_user.id
     manager = active_surveys.get(user_id)
     
@@ -151,6 +157,7 @@ async def cmd_skip(message: types.Message, state: FSMContext):
 
 @dp.message(Command('leads'))
 async def cmd_leads(message: types.Message):
+    """Показать последние 5 заявок (только для админа)"""
     if str(message.from_user.id) != ADMIN_ID:
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
@@ -180,6 +187,7 @@ async def cmd_leads(message: types.Message):
 
 @dp.message(Command('stats'))
 async def cmd_stats(message: types.Message):
+    """Показать статистику по заявкам (только для админа)"""
     if str(message.from_user.id) != ADMIN_ID:
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
@@ -197,31 +205,43 @@ async def cmd_stats(message: types.Message):
 
 @dp.message(Command('export'))
 async def cmd_export(message: types.Message):
+    """Выгружает все заявки в CSV и отправляет файл"""
+    
+    # Проверка прав
     if str(message.from_user.id) != ADMIN_ID:
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
-    
-    leads = db.get_all_leads()
-    
-    if not leads:
-        await message.answer("📭 Пока нет ни одной заявки. Нечего выгружать.")
-        return
-    
-    filename = f"leads_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
+
+    # Отправляем подтверждение, что процесс начался
+    status_msg = await message.answer("⏳ Начинаю подготовку файла...")
+
     try:
+        # Получаем все заявки
+        leads = db.get_all_leads()
+        
+        if not leads:
+            await status_msg.edit_text("📭 Пока нет ни одной заявки. Нечего выгружать.")
+            return
+        
+        # Создаём имя файла с датой
+        filename = f"leads_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        # Создаём CSV файл
         with open(filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(['ID', 'User ID', 'Username', 'Имя', 'Ответы', 'Контакты', 'Дата'])
             
             for lead in leads:
+                # Обрабатываем контактные данные
                 contact = lead[5]
                 try:
                     contact_dict = json.loads(contact)
                     if isinstance(contact_dict, dict) and 'phone' in contact_dict:
                         contact_display = contact_dict['phone']
-                    else:
+                    elif isinstance(contact_dict, dict):
                         contact_display = str(contact_dict)
+                    else:
+                        contact_display = contact
                 except:
                     contact_display = contact
                 
@@ -229,13 +249,65 @@ async def cmd_export(message: types.Message):
                     lead[0], lead[1], lead[2], lead[3], lead[4], contact_display, lead[6]
                 ])
         
+        # Обновляем статус
+        await status_msg.edit_text(f"✅ Файл создан. Отправляю... ({len(leads)} записей)")
+        
+        # Отправляем файл
         with open(filename, 'rb') as f:
             await message.answer_document(
                 f,
                 caption=f"📎 Все заявки (всего: {len(leads)})"
             )
         
+        # Удаляем временный файл
         os.remove(filename)
         
+        # Финальное подтверждение
+        await message.answer("✅ Экспорт завершён успешно!")
+        
     except Exception as e:
-        await message.answer(f"❌ Ошибка при выгрузке: {str(e)}")
+        # Подробный вывод ошибки
+        error_text = f"❌ Ошибка при выгрузке:\n{str(e)}"
+        print(error_text)  # для логов
+        await message.answer(error_text)
+
+# ==================== АДМИН-ПАНЕЛЬ (УПРОЩЁННЫЙ ВВОД) ====================
+
+@dp.message(Command('admin'))
+async def cmd_admin(message: types.Message):
+    """Показывает панель администратора с кнопками"""
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("⛔ У вас нет прав для этой команды.")
+        return
+
+    # Создаём клавиатуру с кнопками для админа
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="/leads - Последние заявки")],
+            [KeyboardButton(text="/stats - Статистика")],
+            [KeyboardButton(text="/export - Выгрузить всё")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False  # Клавиатура остаётся на месте
+    )
+
+    await message.answer(
+        "👮 <b>Панель администратора</b>\n\n"
+        "Выберите действие из меню ниже:",
+        reply_markup=kb
+    )
+
+# ==================== ОБРАБОТКА ТЕКСТОВЫХ КНОПОК ====================
+
+@dp.message(F.text.in_(["/leads - Последние заявки", "/stats - Статистика", "/export - Выгрузить всё"]))
+async def handle_admin_buttons(message: types.Message):
+    """Обрабатывает нажатия на кнопки админ-панели"""
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    
+    if message.text == "/leads - Последние заявки":
+        await cmd_leads(message)
+    elif message.text == "/stats - Статистика":
+        await cmd_stats(message)
+    elif message.text == "/export - Выгрузить всё":
+        await cmd_export(message)
