@@ -2,7 +2,6 @@
   "welcome_message": "👋 Привет! Ответь на пару вопросов, и менеджер свяжется с тобой",
   "final_message": "✅ Спасибо! Мы получили ваши данные. Менеджер свяжется в ближайшее время.",
   "collect_contact": true,
-  "contact_fields": ["name", "phone"],
   "questions": [
     {
       "id": 1,
@@ -19,26 +18,8 @@
       "id": 2,
       "text": "В каком районе города?",
       "type": "text",
-      "next": 3,
-      "required": true
-    },
-    {
-      "id": 3,
-      "text": "Какой бюджет?",
-      "type": "single_choice",
-      "options": [
-        {"text": "до 50 000 ₽", "next": 4},
-        {"text": "50 000 - 200 000 ₽", "next": 4},
-        {"text": "более 200 000 ₽", "next": 4}
-      ],
-      "required": true
-    },
-    {
-      "id": 4,
-      "text": "Дополнительные пожелания",
-      "type": "text",
       "next": null,
-      "required": false
+      "required": true
     }
   ]
 }
