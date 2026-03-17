@@ -1,12 +1,14 @@
 import json
 import csv
 import os
+import traceback
 from datetime import datetime
+from io import BytesIO
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile
 
 from config import bot, dp, ADMIN_ID, QUESTIONS
 from database import db
@@ -205,7 +207,7 @@ async def cmd_stats(message: types.Message):
 
 @dp.message(Command('export'))
 async def cmd_export(message: types.Message):
-    """Выгружает все заявки в CSV и отправляет файл"""
+    """Выгружает все заявки в CSV и отправляет файл (исправленная версия)"""
     
     # Проверка прав
     if str(message.from_user.id) != ADMIN_ID:
@@ -232,16 +234,13 @@ async def cmd_export(message: types.Message):
             writer.writerow(['ID', 'User ID', 'Username', 'Имя', 'Ответы', 'Контакты', 'Дата'])
             
             for lead in leads:
-                # Обрабатываем контактные данные
                 contact = lead[5]
                 try:
                     contact_dict = json.loads(contact)
                     if isinstance(contact_dict, dict) and 'phone' in contact_dict:
                         contact_display = contact_dict['phone']
-                    elif isinstance(contact_dict, dict):
-                        contact_display = str(contact_dict)
                     else:
-                        contact_display = contact
+                        contact_display = str(contact_dict)
                 except:
                     contact_display = contact
                 
@@ -249,29 +248,76 @@ async def cmd_export(message: types.Message):
                     lead[0], lead[1], lead[2], lead[3], lead[4], contact_display, lead[6]
                 ])
         
-        # Обновляем статус
-        await status_msg.edit_text(f"✅ Файл создан. Отправляю... ({len(leads)} записей)")
+        # Проверяем, что файл создан
+        if not os.path.exists(filename):
+            await status_msg.edit_text("❌ Ошибка: файл не создался")
+            return
         
-        # Отправляем файл
-        with open(filename, 'rb') as f:
+        file_size = os.path.getsize(filename)
+        
+        # Обновляем статус
+        await status_msg.edit_text(
+            f"✅ Файл создан (размер: {file_size} байт). Отправляю... ({len(leads)} записей)"
+        )
+        
+        # Пробуем отправить файл разными способами
+        send_success = False
+        
+        # Способ 1: через FSInputFile
+        try:
+            document = FSInputFile(filename)
             await message.answer_document(
-                f,
+                document,
                 caption=f"📎 Все заявки (всего: {len(leads)})"
             )
+            send_success = True
+            await message.answer("✅ Экспорт завершён успешно!")
+            
+        except Exception as send_error:
+            await message.answer(f"⚠️ Способ 1 не сработал: {str(send_error)}")
+            
+            # Способ 2: через BytesIO
+            try:
+                with open(filename, 'rb') as f:
+                    file_bytes = f.read()
+                file_obj = BytesIO(file_bytes)
+                file_obj.name = filename
+                await message.answer_document(
+                    file_obj,
+                    caption=f"📎 Все заявки (всего: {len(leads)}) (способ 2)"
+                )
+                send_success = True
+                await message.answer("✅ Экспорт завершён успешно!")
+                
+            except Exception as send_error2:
+                await message.answer(f"❌ Способ 2 тоже не сработал: {str(send_error2)}")
+                
+                # Способ 3: пробуем отправить как текст (если файл маленький)
+                if file_size < 4096:
+                    try:
+                        with open(filename, 'r', encoding='utf-8') as f:
+                            file_content = f.read()
+                        await message.answer(
+                            f"📎 Содержимое файла (маленький файл):\n\n{file_content}"
+                        )
+                        send_success = True
+                        await message.answer("✅ Экспорт завершён (как текст)")
+                    except Exception as send_error3:
+                        await message.answer(f"❌ И способ 3 не сработал: {str(send_error3)}")
         
         # Удаляем временный файл
         os.remove(filename)
         
-        # Финальное подтверждение
-        await message.answer("✅ Экспорт завершён успешно!")
+        if not send_success:
+            await message.answer("❌ Не удалось отправить файл ни одним способом.")
         
     except Exception as e:
-        # Подробный вывод ошибки
-        error_text = f"❌ Ошибка при выгрузке:\n{str(e)}"
+        error_details = traceback.format_exc()
+        error_text = f"❌ Критическая ошибка:\n{str(e)}\n\n{error_details[:500]}"
         print(error_text)  # для логов
-        await message.answer(error_text)
+        await message.answer(error_text[:1000])
 
-# ==================== АДМИН-ПАНЕЛЬ (УПРОЩЁННЫЙ ВВОД) ====================
+# ==================== АДМИН-ПАНЕЛЬ ====================
 
 @dp.message(Command('admin'))
 async def cmd_admin(message: types.Message):
@@ -288,7 +334,7 @@ async def cmd_admin(message: types.Message):
             [KeyboardButton(text="/export - Выгрузить всё")]
         ],
         resize_keyboard=True,
-        one_time_keyboard=False  # Клавиатура остаётся на месте
+        one_time_keyboard=False
     )
 
     await message.answer(
@@ -297,7 +343,7 @@ async def cmd_admin(message: types.Message):
         reply_markup=kb
     )
 
-# ==================== ОБРАБОТКА ТЕКСТОВЫХ КНОПОК ====================
+# ==================== ОБРАБОТКА КНОПОК ====================
 
 @dp.message(F.text.in_(["/leads - Последние заявки", "/stats - Статистика", "/export - Выгрузить всё"]))
 async def handle_admin_buttons(message: types.Message):
