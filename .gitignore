@@ -3,64 +3,33 @@ venv/
 env/
 .venv/
 ENV/
-env.bak/
-venv.bak/
 
-# Файлы с секретами и конфигурацией
+# Файлы с секретами
 .env
 .env.local
-.env.*.local
-*.env
 
 # Базы данных
 *.db
 *.sqlite
 *.sqlite3
-*.db-journal
 
 # Кэш Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
 
-# Дистрибутивы и сборки
+# Дистрибутивы
 dist/
 build/
 *.egg-info/
-*.egg
 
 # Логи
 *.log
 logs/
-*.log.*
 
-# IDE и редакторы
+# IDE
 .vscode/
 .idea/
 *.swp
-*.swo
-*~
 .DS_Store
-Thumbs.db
-
-# Временные файлы
-tmp/
-temp/
-*.tmp
-*.temp
-
-# Файлы тестов
-.coverage
-htmlcov/
-.tox/
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
