@@ -1,6 +1,7 @@
 import json
-import os
 import csv
+import os
+from datetime import datetime
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -24,7 +25,6 @@ active_surveys = {}
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 async def send_next_question(message: types.Message, manager):
-    """Отправляет следующий вопрос"""
     question = manager.get_current_question()
     
     if question['type'] == 'text':
@@ -39,7 +39,6 @@ async def send_next_question(message: types.Message, manager):
         await message.answer(question['text'], reply_markup=kb)
 
 async def finish_survey(message: types.Message, state: FSMContext, user_id: int, manager):
-    """Завершает опрос и сохраняет данные"""
     db.save_lead(
         user_id=user_id,
         username=message.from_user.username or '',
@@ -129,7 +128,8 @@ async def process_contact(message: types.Message, state: FSMContext):
     
     await message.answer(QUESTIONS['final_message'])
     await state.clear()
-    del active_surveys[user_id]
+    if user_id in active_surveys:
+        del active_surveys[user_id]
 
 @dp.message(Command('skip'))
 async def cmd_skip(message: types.Message, state: FSMContext):
@@ -197,45 +197,44 @@ async def cmd_stats(message: types.Message):
 
 @dp.message(Command('export'))
 async def cmd_export(message: types.Message):
-    """Выгружает все заявки в CSV и отправляет файл"""
-    
-    # Проверка прав
     if str(message.from_user.id) != ADMIN_ID:
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
     
-    # Проверяем, есть ли заявки
-    leads_count = db.get_recent_leads(1)
-    if not leads_count:
+    leads = db.get_all_leads()
+    
+    if not leads:
         await message.answer("📭 Пока нет ни одной заявки. Нечего выгружать.")
         return
     
+    filename = f"leads_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
     try:
-        # Создаём имя файла с датой
-        from datetime import datetime
-        filename = f"leads_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
-        # Получаем все заявки
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT id, user_id, username, full_name, answers, contact_data, created_at
-                FROM leads
-                ORDER BY created_at DESC
-            ''')
-            rows = cursor.fetchall()
-        
-        # Создаём CSV файл
         with open(filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(['ID', 'User ID', 'Username', 'Имя', 'Ответы', 'Контакты', 'Дата'])
-            writer.writerows(rows)
+            
+            for lead in leads:
+                contact = lead[5]
+                try:
+                    contact_dict = json.loads(contact)
+                    if isinstance(contact_dict, dict) and 'phone' in contact_dict:
+                        contact_display = contact_dict['phone']
+                    else:
+                        contact_display = str(contact_dict)
+                except:
+                    contact_display = contact
+                
+                writer.writerow([
+                    lead[0], lead[1], lead[2], lead[3], lead[4], contact_display, lead[6]
+                ])
         
-        # Отправляем файл
         with open(filename, 'rb') as f:
-            await message.answer_document(f, caption=f"📎 Все заявки (всего: {len(rows)})")
+            await message.answer_document(
+                f,
+                caption=f"📎 Все заявки (всего: {len(leads)})"
+            )
         
-        # Удаляем временный файл
         os.remove(filename)
         
     except Exception as e:
