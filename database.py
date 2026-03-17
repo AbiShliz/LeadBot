@@ -1,5 +1,4 @@
 import sqlite3
-import csv
 import json
 from datetime import datetime
 
@@ -28,7 +27,6 @@ class Database:
             conn.commit()
     
     def save_lead(self, user_id, username, full_name, answers, contact_data):
-        """Сохраняет заявку"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -39,7 +37,6 @@ class Database:
             return cursor.lastrowid
     
     def get_recent_leads(self, limit=5):
-        """Получает последние N заявок"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -51,7 +48,6 @@ class Database:
             return cursor.fetchall()
     
     def get_stats(self):
-        """Получает статистику заявок по дням"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -63,8 +59,7 @@ class Database:
             ''')
             return cursor.fetchall()
     
-    def export_csv(self, filename='leads.csv'):
-        """Экспортирует все заявки в CSV"""
+    def get_all_leads(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -72,13 +67,6 @@ class Database:
                 FROM leads
                 ORDER BY created_at DESC
             ''')
-            rows = cursor.fetchall()
-            
-            with open(filename, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(['ID', 'User ID', 'Username', 'Имя', 'Ответы', 'Контакты', 'Дата'])
-                writer.writerows(rows)
-            return filename
+            return cursor.fetchall()
 
-# Создаём глобальный экземпляр базы данных
 db = Database()
