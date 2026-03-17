@@ -1,20 +1,77 @@
+
 import json
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from config import bot, dp, QUESTIONS
-from database import db
-from survey import SurveyManager, SurveyStates
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-# Хранилище активных опросников
+from config import bot, dp, ADMIN_ID, QUESTIONS
+from database import db
+from survey import SurveyManager
+
+# ==================== СОСТОЯНИЯ FSM ====================
+
+class SurveyStates(StatesGroup):
+    answering = State()
+    collecting_contact = State()
+
+# ==================== ХРАНИЛИЩЕ АКТИВНЫХ ОПРОСОВ ====================
+
 active_surveys = {}
+
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+
+async def send_next_question(message: types.Message, manager):
+    """Отправляет следующий вопрос"""
+    question = manager.get_current_question()
+    
+    if question['type'] == 'text':
+        await message.answer(question['text'])
+    
+    elif question['type'] == 'single_choice':
+        # Создаём клавиатуру с вариантами
+        kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=opt['text'])] for opt in question['options']],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        await message.answer(question['text'], reply_markup=kb)
+
+async def finish_survey(message: types.Message, state: FSMContext, user_id: int, manager):
+    """Завершает опрос и сохраняет данные"""
+    # Сохраняем в базу
+    db.save_lead(
+        user_id=user_id,
+        username=message.from_user.username or '',
+        full_name=message.from_user.full_name,
+        answers=manager.format_answers(),
+        contact_data='{}'  # без контакта
+    )
+    
+    # Отправляем уведомление админу
+    if ADMIN_ID:
+        await bot.send_message(
+            ADMIN_ID,
+            f"🆕 Новая заявка!\n\n"
+            f"От: {message.from_user.full_name} (@{message.from_user.username})\n"
+            f"Без контакта\n\n"
+            f"Ответы:\n{manager.format_answers()}"
+        )
+    
+    await message.answer(QUESTIONS['final_message'])
+    await state.clear()
+    if user_id in active_surveys:
+        del active_surveys[user_id]
+
+# ==================== ОСНОВНЫЕ КОМАНДЫ ====================
 
 @dp.message(Command('start'))
 async def cmd_start(message: types.Message, state: FSMContext):
     """Начинает опрос"""
     user_id = message.from_user.id
     
-    # Создаем новый менеджер опроса
+    # Создаём новый менеджер опроса
     manager = SurveyManager(QUESTIONS)
     active_surveys[user_id] = manager
     
@@ -25,27 +82,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await state.set_state(SurveyStates.answering)
     await send_next_question(message, manager)
 
-async def send_next_question(message: types.Message, manager):
-    """Отправляет следующий вопрос"""
-    question = manager.get_current_question()
-    
-    if question['type'] == 'text':
-        await message.answer(question['text'])
-    
-    elif question['type'] == 'single_choice':
-        # Создаем клавиатуру с вариантами
-        kb = types.ReplyKeyboardMarkup(
-            keyboard=[[types.KeyboardButton(text=opt['text'])] for opt in question['options']],
-            resize_keyboard=True,
-            one_time_keyboard=True
-        )
-        await message.answer(question['text'], reply_markup=kb)
-    
-    elif question['type'] == 'multiple_choice':
-        # Для множественного выбора можно сделать инлайн кнопки
-        # или простой текстовый ввод с запятыми
-        await message.answer(f"{question['text']}\n(можно выбрать несколько через запятую)")
-
 @dp.message(SurveyStates.answering)
 async def process_answer(message: types.Message, state: FSMContext):
     """Обрабатывает ответ на вопрос"""
@@ -53,7 +89,7 @@ async def process_answer(message: types.Message, state: FSMContext):
     manager = active_surveys.get(user_id)
     
     if not manager:
-        await message.answer("Ошибка. Начните заново: /start")
+        await message.answer("❌ Ошибка. Начните заново: /start")
         await state.clear()
         return
     
@@ -67,7 +103,7 @@ async def process_answer(message: types.Message, state: FSMContext):
             await message.answer(
                 "📞 Оставьте ваш контактный телефон\n"
                 "(или отправьте /skip если не хотите указывать)",
-                reply_markup=types.ReplyKeyboardRemove()
+                reply_markup=ReplyKeyboardRemove()
             )
         else:
             # Завершаем опрос
@@ -83,7 +119,7 @@ async def process_contact(message: types.Message, state: FSMContext):
     manager = active_surveys.get(user_id)
     
     if not manager:
-        await message.answer("Ошибка. Начните заново: /start")
+        await message.answer("❌ Ошибка. Начните заново: /start")
         await state.clear()
         return
     
@@ -99,30 +135,15 @@ async def process_contact(message: types.Message, state: FSMContext):
         contact_data=json.dumps(contact_data, ensure_ascii=False)
     )
     
-    # Отправляем уведомление менеджеру (если указан)
-    if config.ADMIN_ID:
+    # Отправляем уведомление админу
+    if ADMIN_ID:
         await bot.send_message(
-            config.ADMIN_ID,
+            ADMIN_ID,
             f"🆕 Новая заявка!\n\n"
             f"От: {message.from_user.full_name} (@{message.from_user.username})\n"
             f"Телефон: {message.text}\n\n"
             f"Ответы:\n{manager.format_answers()}"
         )
-    
-    await message.answer(QUESTIONS['final_message'])
-    await state.clear()
-    del active_surveys[user_id]
-
-async def finish_survey(message, state, user_id, manager):
-    """Завершает опрос без сбора контактов"""
-    # Сохраняем без контакта
-    db.save_lead(
-        user_id=user_id,
-        username=message.from_user.username or '',
-        full_name=message.from_user.full_name,
-        answers=manager.format_answers(),
-        contact_data='{}'
-    )
     
     await message.answer(QUESTIONS['final_message'])
     await state.clear()
@@ -135,24 +156,65 @@ async def cmd_skip(message: types.Message, state: FSMContext):
     manager = active_surveys.get(user_id)
     
     if not manager:
-        await message.answer("Нет активного опроса. /start")
+        await message.answer("❌ Нет активного опроса. /start")
         await state.clear()
         return
     
     # Если пропускаем контакт
-    if await state.get_state() == SurveyStates.collecting_contact:
+    current_state = await state.get_state()
+    if current_state == SurveyStates.collecting_contact.state:
         await finish_survey(message, state, user_id, manager)
     else:
-        await message.answer("Пропустить этот вопрос нельзя")
+        await message.answer("❌ Пропустить этот вопрос нельзя")
+
+# ==================== АДМИН-КОМАНДЫ ====================
+
+@dp.message(Command('leads'))
+async def cmd_leads(message: types.Message):
+    """Показать последние 5 заявок (только для админа)"""
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("⛔ У вас нет прав для этой команды.")
+        return
+    
+    leads = db.get_recent_leads(5)
+    
+    if not leads:
+        await message.answer("📭 Пока нет ни одной заявки.")
+        return
+    
+    text = "📋 <b>Последние 5 заявок:</b>\n\n"
+    for lead in leads:
+        # lead: (id, user_id, username, full_name, answers, contact_data, created_at)
+        text += f"🆔 <b>ID:</b> {lead[0]}\n"
+        text += f"👤 <b>Имя:</b> {lead[3]}\n"
+        
+        # Контактные данные
+        contact = json.loads(lead[5]) if lead[5] != '{}' else 'не указан'
+        if isinstance(contact, dict) and 'phone' in contact:
+            contact_display = contact['phone']
+        else:
+            contact_display = lead[5]
+        
+        text += f"📞 <b>Контакт:</b> {contact_display}\n"
+        text += f"📅 <b>Дата:</b> {lead[6]}\n"
+        text += f"💬 <b>Ответы:</b>\n{lead[4]}\n"
+        text += "—\n"
+    
+    await message.answer(text)
 
 @dp.message(Command('stats'))
 async def cmd_stats(message: types.Message):
-    """Статистика для админа"""
-    if message.from_user.id != int(config.ADMIN_ID):
-        await message.answer("⛔ Доступ запрещён")
+    """Показать статистику по заявкам (только для админа)"""
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("⛔ У вас нет прав для этой команды.")
         return
     
     stats = db.get_stats()
+    
+    if not stats:
+        await message.answer("📊 Пока нет статистики.")
+        return
+    
     text = "📊 <b>Статистика заявок:</b>\n\n"
     for date, count in stats:
         text += f"{date}: {count}\n"
@@ -160,11 +222,13 @@ async def cmd_stats(message: types.Message):
 
 @dp.message(Command('export'))
 async def cmd_export(message: types.Message):
-    """Экспорт заявок в CSV"""
-    if message.from_user.id != int(config.ADMIN_ID):
-        await message.answer("⛔ Доступ запрещён")
+    """Выгрузить все заявки в CSV (только для админа)"""
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("⛔ У вас нет прав для этой команды.")
         return
     
     filename = db.export_csv()
+    
+    # Отправляем файл
     with open(filename, 'rb') as f:
-        await message.answer_document(f, caption="📎 Заявки в CSV")
+        await message.answer_document(f, caption="📎 Все заявки в CSV")
