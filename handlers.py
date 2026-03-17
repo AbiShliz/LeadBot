@@ -1,5 +1,6 @@
-
 import json
+import os
+import csv
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -30,7 +31,6 @@ async def send_next_question(message: types.Message, manager):
         await message.answer(question['text'])
     
     elif question['type'] == 'single_choice':
-        # Создаём клавиатуру с вариантами
         kb = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=opt['text'])] for opt in question['options']],
             resize_keyboard=True,
@@ -40,16 +40,14 @@ async def send_next_question(message: types.Message, manager):
 
 async def finish_survey(message: types.Message, state: FSMContext, user_id: int, manager):
     """Завершает опрос и сохраняет данные"""
-    # Сохраняем в базу
     db.save_lead(
         user_id=user_id,
         username=message.from_user.username or '',
         full_name=message.from_user.full_name,
         answers=manager.format_answers(),
-        contact_data='{}'  # без контакта
+        contact_data='{}'
     )
     
-    # Отправляем уведомление админу
     if ADMIN_ID:
         await bot.send_message(
             ADMIN_ID,
@@ -68,23 +66,15 @@ async def finish_survey(message: types.Message, state: FSMContext, user_id: int,
 
 @dp.message(Command('start'))
 async def cmd_start(message: types.Message, state: FSMContext):
-    """Начинает опрос"""
     user_id = message.from_user.id
-    
-    # Создаём новый менеджер опроса
     manager = SurveyManager(QUESTIONS)
     active_surveys[user_id] = manager
-    
-    # Отправляем приветствие
     await message.answer(QUESTIONS['welcome_message'])
-    
-    # Переходим к первому вопросу
     await state.set_state(SurveyStates.answering)
     await send_next_question(message, manager)
 
 @dp.message(SurveyStates.answering)
 async def process_answer(message: types.Message, state: FSMContext):
-    """Обрабатывает ответ на вопрос"""
     user_id = message.from_user.id
     manager = active_surveys.get(user_id)
     
@@ -93,11 +83,9 @@ async def process_answer(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Обрабатываем ответ
     result = manager.process_answer(message.text)
     
     if result == 'contact':
-        # Переходим к сбору контактов
         if QUESTIONS.get('collect_contact'):
             await state.set_state(SurveyStates.collecting_contact)
             await message.answer(
@@ -106,15 +94,12 @@ async def process_answer(message: types.Message, state: FSMContext):
                 reply_markup=ReplyKeyboardRemove()
             )
         else:
-            # Завершаем опрос
             await finish_survey(message, state, user_id, manager)
     else:
-        # Отправляем следующий вопрос
         await send_next_question(message, manager)
 
 @dp.message(SurveyStates.collecting_contact)
 async def process_contact(message: types.Message, state: FSMContext):
-    """Собирает контактные данные"""
     user_id = message.from_user.id
     manager = active_surveys.get(user_id)
     
@@ -123,10 +108,8 @@ async def process_contact(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Сохраняем контакт
     contact_data = {'phone': message.text}
     
-    # Сохраняем в базу
     db.save_lead(
         user_id=user_id,
         username=message.from_user.username or '',
@@ -135,7 +118,6 @@ async def process_contact(message: types.Message, state: FSMContext):
         contact_data=json.dumps(contact_data, ensure_ascii=False)
     )
     
-    # Отправляем уведомление админу
     if ADMIN_ID:
         await bot.send_message(
             ADMIN_ID,
@@ -151,7 +133,6 @@ async def process_contact(message: types.Message, state: FSMContext):
 
 @dp.message(Command('skip'))
 async def cmd_skip(message: types.Message, state: FSMContext):
-    """Пропускает текущий шаг"""
     user_id = message.from_user.id
     manager = active_surveys.get(user_id)
     
@@ -160,7 +141,6 @@ async def cmd_skip(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Если пропускаем контакт
     current_state = await state.get_state()
     if current_state == SurveyStates.collecting_contact.state:
         await finish_survey(message, state, user_id, manager)
@@ -171,7 +151,6 @@ async def cmd_skip(message: types.Message, state: FSMContext):
 
 @dp.message(Command('leads'))
 async def cmd_leads(message: types.Message):
-    """Показать последние 5 заявок (только для админа)"""
     if str(message.from_user.id) != ADMIN_ID:
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
@@ -184,17 +163,14 @@ async def cmd_leads(message: types.Message):
     
     text = "📋 <b>Последние 5 заявок:</b>\n\n"
     for lead in leads:
-        # lead: (id, user_id, username, full_name, answers, contact_data, created_at)
-        text += f"🆔 <b>ID:</b> {lead[0]}\n"
-        text += f"👤 <b>Имя:</b> {lead[3]}\n"
-        
-        # Контактные данные
         contact = json.loads(lead[5]) if lead[5] != '{}' else 'не указан'
         if isinstance(contact, dict) and 'phone' in contact:
             contact_display = contact['phone']
         else:
             contact_display = lead[5]
         
+        text += f"🆔 <b>ID:</b> {lead[0]}\n"
+        text += f"👤 <b>Имя:</b> {lead[3]}\n"
         text += f"📞 <b>Контакт:</b> {contact_display}\n"
         text += f"📅 <b>Дата:</b> {lead[6]}\n"
         text += f"💬 <b>Ответы:</b>\n{lead[4]}\n"
@@ -204,7 +180,6 @@ async def cmd_leads(message: types.Message):
 
 @dp.message(Command('stats'))
 async def cmd_stats(message: types.Message):
-    """Показать статистику по заявкам (только для админа)"""
     if str(message.from_user.id) != ADMIN_ID:
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
@@ -222,13 +197,46 @@ async def cmd_stats(message: types.Message):
 
 @dp.message(Command('export'))
 async def cmd_export(message: types.Message):
-    """Выгрузить все заявки в CSV (только для админа)"""
+    """Выгружает все заявки в CSV и отправляет файл"""
+    
+    # Проверка прав
     if str(message.from_user.id) != ADMIN_ID:
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
     
-    filename = db.export_csv()
+    # Проверяем, есть ли заявки
+    leads_count = db.get_recent_leads(1)
+    if not leads_count:
+        await message.answer("📭 Пока нет ни одной заявки. Нечего выгружать.")
+        return
     
-    # Отправляем файл
-    with open(filename, 'rb') as f:
-        await message.answer_document(f, caption="📎 Все заявки в CSV")
+    try:
+        # Создаём имя файла с датой
+        from datetime import datetime
+        filename = f"leads_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        # Получаем все заявки
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, user_id, username, full_name, answers, contact_data, created_at
+                FROM leads
+                ORDER BY created_at DESC
+            ''')
+            rows = cursor.fetchall()
+        
+        # Создаём CSV файл
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['ID', 'User ID', 'Username', 'Имя', 'Ответы', 'Контакты', 'Дата'])
+            writer.writerows(rows)
+        
+        # Отправляем файл
+        with open(filename, 'rb') as f:
+            await message.answer_document(f, caption=f"📎 Все заявки (всего: {len(rows)})")
+        
+        # Удаляем временный файл
+        os.remove(filename)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при выгрузке: {str(e)}")
